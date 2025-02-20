@@ -1,16 +1,39 @@
 #!/bin/bash
-
 # Save as ~/scripts/distributed-run
 
-if [ "$#" -lt 2 ]; then
-    echo "Usage: sh ~/scripts/distributed-run \"machine1 machine2 machine3...\" \"PYTHON_SCRIPT\""
-    exit 1
+# Function to kill processes in all tmux sessions
+kill_tmux_processes() {
+    echo "Sending kill signal to all tmux sessions..."
+    for ((id=0; id<NUM_MACHINES; id++)); do
+        machine_name=${MACHINES[$id]}
+        
+        (
+            echo "Sending Ctrl+C to $machine_name..."
+            ssh -T "$machine_name" "tmux has-session -t 0 2>/dev/null && tmux send-keys -t 0 C-c" &
+        )
+    done
+    wait
+    echo "Kill signals sent to all machines."
+}
+
+# Check for kill command
+if [[ "$1" == "--kill" ]]; then
+    # Set machines from argument or default
+    ARG2="${2:-"ttt-1 ttt-2 ttt-3 ttt-4 ttt-5 ttt-6 ttt-7 ttt-8"}"
+    MACHINES=($ARG2)
+    NUM_MACHINES=${#MACHINES[@]}
+    
+    kill_tmux_processes
+    exit 0
 fi
 
+ARG1="$1"
+# Set default for second argument if not provided
+ARG2="${2:-"ttt-1 ttt-2 ttt-3 ttt-4 ttt-5 ttt-6 ttt-7 ttt-8"}"
 # First argument is space-separated machine names
-MACHINES=($1)
+MACHINES=($ARG2)
 # Second argument is the command
-COMMAND=$2
+COMMAND=$ARG1
 
 evaluate_math() {
     local expr=$1
@@ -29,7 +52,7 @@ process_template() {
         expr=${expr//id/$id}
         expr=${expr//machine_name/$machine_name}
         
-        if [[ $expr =~ [+\-*/%] ]]; do
+        if [[ $expr =~ [+\-*/%] ]]; then
             local result=$(evaluate_math "$expr")
             template=${template//$match/$result}
         else
@@ -53,12 +76,14 @@ for ((id=0; id<NUM_MACHINES; id++)); do
     processed_command=$(process_template "$COMMAND" "$id")
     
     (
-        ssh "$machine_name" << EOF &
+        ssh -T "$machine_name" << EOF &
+            tmux has-session -t 0 2>/dev/null || tmux new-session -d -s 0
             tmux send-keys -t 0 "conda activate ttt" Enter
-            tmux send-keys -t 0 "cd ttte" Enter
+            tmux send-keys -t 0 "cd ~/ttte" Enter
             tmux send-keys -t 0 "$processed_command" Enter
 EOF
     )
 done
 
+echo "Commands sent to all machines. To kill all processes, run: $(basename $0) --kill"
 wait
