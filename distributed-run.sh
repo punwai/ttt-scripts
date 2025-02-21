@@ -14,6 +14,29 @@ kill_tmux_processes() {
     wait
     echo "Kill signals sent to all machines."
 }
+
+
+safe_replace() {
+    local template="$1"
+    local match="$2"
+    local expr="$3"
+    
+    # Escape special regex characters in match and expr
+    local escaped_match=$(printf '%s' "$match" | sed 's/[]\[^$.*/]/\\&/g')
+    local escaped_expr=$(printf '%s' "$expr" | sed 's/[]\[^$.*/]/\\&/g')
+    
+    # Perform global replacement using sed
+    printf '%s' "$template" | sed "s/$escaped_match/$escaped_expr/g"
+}
+
+
+
+escape_dollars() {
+    local input="$1"
+    local escaped_string="${input//\$/\\$}"
+    echo "$escaped_string"
+}
+
 # Check for kill command
 if [[ "$1" == "--kill" ]]; then
     # Set machines from argument or default
@@ -30,43 +53,44 @@ ARG2="${2:-"ttt-1 ttt-2 ttt-3 ttt-4 ttt-5 ttt-6 ttt-7 ttt-8"}"
 # First argument is the command, second is space-separated machine names
 COMMAND=$ARG1
 MACHINES=($ARG2)
+
 evaluate_math() {
     local expr=$1
     echo "scale=6; $expr" | bc | sed 's/^\./0./' | sed 's/^-\./-0./' | awk '{printf "%.6f\n", $0}' | sed 's/\.000000$//'
 }
+
 process_template() {
     local template=$1
     local id=$2
     local machine_name=${MACHINES[$id]}
-    
+
     # Process the template to replace variables
-    while [[ "$template" =~ \$\{([^}]*)\} ]]; do
+    while [[ "$template" =~ \$\[([^]]*)\] ]]; do
         local match="${BASH_REMATCH[0]}"
         local expr="${BASH_REMATCH[1]}"
         
         expr=${expr//id/$id}
         expr=${expr//machine_name/$machine_name}
-        
+
         if [[ $expr =~ [+\-*/%] ]]; then
             local result=$(evaluate_math "$expr")
-            template=${template//$match/$result}
+	    template=$(safe_replace "$template" "$match" "$expr")
         else
-            case $expr in
-                "id") template=${template//$match/$id};;
-                "machine_name") template=${template//$match/$machine_name};;
-                *) echo "Unknown variable: $expr"; exit 1;;
-            esac
+	    template=$(safe_replace "$template" "$match" "$expr")
+	    break
         fi
     done
-    
-    echo "$template"
+
+    echo "$template $match $expr"
 }
+
 # Get number of machines
 NUM_MACHINES=${#MACHINES[@]}
 # Run commands on all machines simultaneously
 for ((id=0; id<NUM_MACHINES; id++)); do
     machine_name=${MACHINES[$id]}
     processed_command=$(process_template "$COMMAND" "$id")
+    echo "$processed_command"
     
     (
         ssh -T "$machine_name" << EOF &
@@ -74,7 +98,7 @@ for ((id=0; id<NUM_MACHINES; id++)); do
             tmux send-keys -t 0 "conda activate ttt" Enter
             tmux send-keys -t 0 "cd ~/ttte" Enter
             tmux send-keys -t 0 "$processed_command" Enter
-EOF
+	    EOF
     )
 done
 echo "Commands sent to all machines. To kill all processes, run: $(basename $0) --kill"
